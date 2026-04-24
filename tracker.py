@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,18 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-AU,en;q=0.9",
+}
+CHEMIST_WAREHOUSE_HEADERS = {
+    **HEADERS,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Cache-Control": "max-age=0",
+    "Pragma": "no-cache",
+    "Referer": "https://www.chemistwarehouse.com.au/",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 PRICE_KEYS = {"price", "lowPrice", "highPrice", "salePrice", "finalPrice", "amount"}
@@ -203,6 +216,50 @@ def get_domain(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
+def build_failure_status(response: requests.Response) -> str:
+    title = ""
+    if response.text:
+        match = re.search(r"<title[^>]*>(.*?)</title>", response.text, flags=re.I | re.S)
+        if match:
+            title = re.sub(r"\s+", " ", match.group(1)).strip()[:80]
+    if title:
+        return f"HTTP {response.status_code} ({title})"
+    return f"HTTP {response.status_code}"
+
+
+def fetch_with_session(session: requests.Session, url: str, headers: Dict[str, str], timeout: int = 25) -> requests.Response:
+    return session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+
+
+def fetch_chemist_warehouse(session: requests.Session, url: str) -> requests.Response:
+    variants = [
+        ("direct", CHEMIST_WAREHOUSE_HEADERS),
+        ("with_homepage_cookie", {**CHEMIST_WAREHOUSE_HEADERS, "Sec-Fetch-Site": "same-origin"}),
+        ("cross_site_referer", {**CHEMIST_WAREHOUSE_HEADERS, "Sec-Fetch-Site": "cross-site"}),
+    ]
+
+    last_response = None
+    for index, (label, headers) in enumerate(variants, start=1):
+        if label == "with_homepage_cookie":
+            try:
+                session.get("https://www.chemistwarehouse.com.au/", headers=CHEMIST_WAREHOUSE_HEADERS, timeout=25)
+                time.sleep(1)
+            except requests.RequestException:
+                pass
+
+        response = fetch_with_session(session, url, headers)
+        print(f"[DEBUG] Chemist Warehouse attempt {index}: status={response.status_code} final_url={response.url}")
+        last_response = response
+
+        if response.status_code < 400:
+            return response
+        if response.status_code not in {403, 429}:
+            return response
+        time.sleep(index)
+
+    return last_response
+
+
 def extract_price(soup: BeautifulSoup, html: str, url: str) -> Tuple[Optional[float], Optional[str]]:
     domain = get_domain(url)
     extractors = [
@@ -228,12 +285,17 @@ def extract_price(soup: BeautifulSoup, html: str, url: str) -> Tuple[Optional[fl
 
 
 def fetch_price(url: str) -> Dict[str, Any]:
+    domain = get_domain(url)
     try:
-        r = requests.get(url, headers=HEADERS, timeout=25)
+        with requests.Session() as session:
+            if "chemistwarehouse.com.au" in domain:
+                r = fetch_chemist_warehouse(session, url)
+            else:
+                r = fetch_with_session(session, url, HEADERS)
         status = r.status_code
         html = r.text
         if status >= 400:
-            return {"price": None, "source": None, "status": f"HTTP {status}"}
+            return {"price": None, "source": None, "status": build_failure_status(r)}
         soup = BeautifulSoup(html, "lxml")
         price, source = extract_price(soup, html, url)
         return {"price": price, "source": source, "status": "ok" if price is not None else "price_not_found"}
