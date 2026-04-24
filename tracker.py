@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import csv
 from urllib.parse import urlparse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 
 PRODUCTS_FILE = Path("products.json")
+PRODUCTS_CSV_FILE = Path("products.csv")
 STATE_FILE = Path("data/prices.json")
 
 HEADERS = {
@@ -56,6 +58,32 @@ def load_json(path: Path, default):
 def save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def load_products() -> List[Dict[str, Any]]:
+    if PRODUCTS_CSV_FILE.exists():
+        return load_products_csv(PRODUCTS_CSV_FILE)
+    return load_json(PRODUCTS_FILE, [])
+
+
+def load_products_csv(path: Path) -> List[Dict[str, Any]]:
+    rows = []
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            clean_row = {str(k).strip(): (v or "").strip() for k, v in row.items() if k}
+            if not clean_row.get("product_name") or not clean_row.get("url"):
+                continue
+            target_price = clean_row.get("target_price")
+            rows.append(
+                {
+                    "name": clean_row["product_name"],
+                    "retailer": clean_row.get("retailer") or None,
+                    "url": clean_row["url"],
+                    "target_price": float(target_price) if target_price else None,
+                }
+            )
+    return rows
 
 
 def clean_price(value) -> Optional[float]:
@@ -359,7 +387,7 @@ def normalize_products(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def main():
-    products = normalize_products(load_json(PRODUCTS_FILE, []))
+    products = normalize_products(load_products())
     state = load_json(STATE_FILE, {})
     now = datetime.now(timezone.utc).isoformat()
     alerts = []
