@@ -3,6 +3,7 @@ import os
 import re
 import time
 import csv
+import html
 from urllib.parse import urlparse, urlunparse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -489,7 +490,7 @@ def send_telegram(message: str):
         return
     telegram_request(
         "sendMessage",
-        {"chat_id": chat_id, "text": message, "disable_web_page_preview": False},
+        {"chat_id": chat_id, "text": message, "disable_web_page_preview": True, "parse_mode": "HTML"},
     )
 
 
@@ -509,8 +510,12 @@ def format_added_message(product_name: str, retailer: str, url: str) -> str:
     return f"Added: {product_name} [{retailer}]"
 
 
+def format_link(label: str, url: str) -> str:
+    return f'<a href="{html.escape(url, quote=True)}">{html.escape(label)}</a>'
+
+
 def format_alert_message(icon: str, label: str, name: str, price_lines: List[str], url: str) -> str:
-    return f"{icon} {name}\n" + " | ".join(price_lines)
+    return f"{icon} {format_link(name, url)}\n" + " | ".join(html.escape(line) for line in price_lines)
 
 
 def format_failure_summary(failures: List[Dict[str, str]]) -> str:
@@ -556,11 +561,13 @@ def build_latest_prices_message() -> str:
 
     for index, item in enumerate(entries, start=1):
         name = item.get("name") or "Product"
+        url = item.get("url") or ""
         price = item.get("price")
+        label = format_link(name, url) if url else html.escape(name)
         if price is not None:
-            lines.append(f"{index}. {name}: {money(price)}")
+            lines.append(f"{index}. {label}: {money(price)}")
         else:
-            lines.append(f"{index}. {name}: unavailable")
+            lines.append(f"{index}. {label}: unavailable")
 
     return "\n".join(lines)
 
@@ -585,7 +592,6 @@ def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, 
             }
         )
         existing_urls.add(url)
-        notifications.append(format_added_message(product_name, retailer, url))
         print(f"[ADDED] {product_name} | retailer={retailer} | url={url}")
 
         if response.status_code >= 400:
@@ -603,7 +609,6 @@ def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, 
             )
             print(f"[DISCOVERED] {product_name} | retailer={item['retailer']} | url={item['url']}")
 
-        notifications.append(format_discovery_message(product_name, discovered))
     except Exception as exc:
         notifications.append(f"I could not add this link because of an error:\n{url}\n{type(exc).__name__}: {exc}")
 
