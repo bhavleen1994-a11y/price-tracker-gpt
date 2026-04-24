@@ -23,7 +23,7 @@ It is designed to run automatically in GitHub Actions, so you do not need to kee
 5. Open the **Actions** tab.
 6. Open the **Price Tracker** workflow.
 7. Click **Run workflow** to test it once.
-8. After that, GitHub Actions will run it automatically every 6 hours.
+8. After that, GitHub Actions will run it automatically every 5 minutes.
 
 ## How To Use It
 
@@ -50,7 +50,9 @@ https://www.jbhifi.com.au/products/apple-iphone-17-256gb-lavender
 ### Telegram commands
 
 - `/help` shows what the bot can do
+- `/add <url>` adds a product link
 - `/list` shows the products currently being tracked
+- `/run` tells you the tracker will check again on the next automatic cycle
 
 You do not need to edit JSON or spreadsheet files yourself.
 
@@ -73,6 +75,8 @@ If you want to test the tracker any time:
 5. Open the latest run to see the log output.
 
 The logs now show which products succeeded, which failed, and where the price was found.
+
+The automatic workflow now runs every 5 minutes, so Telegram commands feel much closer to instant.
 
 ## Files In This Repo
 

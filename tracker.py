@@ -395,6 +395,34 @@ def build_tracked_products_message() -> str:
     return "\n".join(lines)
 
 
+def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, str]], notifications: List[str]):
+    if url in existing_urls:
+        notifications.append(f"Already tracking this link:\n{url}")
+        return
+
+    try:
+        response = fetch_page(url)
+        if response.status_code >= 400:
+            notifications.append(f"I could not add this link yet because the store returned {response.status_code}:\n{url}")
+            return
+
+        product_name = infer_product_name(url, response.text)
+        retailer = infer_retailer_name(url)
+        csv_rows.append(
+            {
+                "product_name": product_name,
+                "retailer": retailer,
+                "url": url,
+                "target_price": "",
+            }
+        )
+        existing_urls.add(url)
+        notifications.append(f"Added to tracker:\n{product_name}\nStore: {retailer}\n{url}")
+        print(f"[ADDED] {product_name} | retailer={retailer} | url={url}")
+    except Exception as exc:
+        notifications.append(f"I could not add this link because of an error:\n{url}\n{type(exc).__name__}: {exc}")
+
+
 def process_telegram_commands() -> List[str]:
     token, chat_id = get_telegram_credentials()
     if not token or not chat_id:
@@ -429,12 +457,27 @@ def process_telegram_commands() -> List[str]:
                 "Send me a product link and I will add it to the tracker automatically.\n\n"
                 "Commands:\n"
                 "/help - show instructions\n"
-                "/list - show tracked products"
+                "/add <url> - add a product link\n"
+                "/list - show tracked products\n"
+                "/run - check everything on the next scheduled cycle"
             )
             continue
 
         if lowered.startswith("/list"):
             notifications.append(build_tracked_products_message())
+            continue
+
+        if lowered.startswith("/run"):
+            notifications.append("Okay. I will process your tracker on the next automatic run. The workflow now checks every 5 minutes.")
+            continue
+
+        if lowered.startswith("/add"):
+            urls = extract_urls_from_text(text)
+            if not urls:
+                notifications.append("Use /add followed by a full product link.\nExample:\n/add https://example.com/product")
+                continue
+            for url in urls:
+                add_product_from_url(url, existing_urls, csv_rows, notifications)
             continue
 
         urls = extract_urls_from_text(text)
@@ -443,31 +486,7 @@ def process_telegram_commands() -> List[str]:
             continue
 
         for url in urls:
-            if url in existing_urls:
-                notifications.append(f"Already tracking this link:\n{url}")
-                continue
-
-            try:
-                response = fetch_page(url)
-                if response.status_code >= 400:
-                    notifications.append(f"I could not add this link yet because the store returned {response.status_code}:\n{url}")
-                    continue
-
-                product_name = infer_product_name(url, response.text)
-                retailer = infer_retailer_name(url)
-                csv_rows.append(
-                    {
-                        "product_name": product_name,
-                        "retailer": retailer,
-                        "url": url,
-                        "target_price": "",
-                    }
-                )
-                existing_urls.add(url)
-                notifications.append(f"Added to tracker:\n{product_name}\nStore: {retailer}\n{url}")
-                print(f"[ADDED] {product_name} | retailer={retailer} | url={url}")
-            except Exception as exc:
-                notifications.append(f"I could not add this link because of an error:\n{url}\n{type(exc).__name__}: {exc}")
+            add_product_from_url(url, existing_urls, csv_rows, notifications)
 
     save_products_csv(PRODUCTS_CSV_FILE, csv_rows)
     save_json(BOT_STATE_FILE, bot_state)
