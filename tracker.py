@@ -15,6 +15,7 @@ PRODUCTS_FILE = Path("products.json")
 PRODUCTS_CSV_FILE = Path("products.csv")
 STATE_FILE = Path("data/prices.json")
 BOT_STATE_FILE = Path("data/bot_state.json")
+PERCENT_DROP_ALERT_THRESHOLD = float(os.environ.get("PERCENT_DROP_ALERT_THRESHOLD", "10"))
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
@@ -533,6 +534,41 @@ def format_discovery_message(product_name: str, discovered: List[Dict[str, str]]
     return "\n".join(lines)
 
 
+def format_checked_time(timestamp: str) -> str:
+    if not timestamp:
+        return "unknown time"
+    cleaned = timestamp.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(cleaned)
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return timestamp
+
+
+def build_latest_prices_message() -> str:
+    state = load_json(STATE_FILE, {})
+    if not state:
+        return "No saved prices yet. Run the workflow first, then try /list again."
+
+    entries = sorted(
+        state.values(),
+        key=lambda item: ((item.get("name") or ""), (item.get("retailer") or "")),
+    )
+    checked_at = max((item.get("checked_at") or "" for item in entries), default="")
+    lines = [f"Latest prices ({format_checked_time(checked_at)}):"]
+
+    for index, item in enumerate(entries, start=1):
+        name = item.get("name") or "Product"
+        status = item.get("status") or "unknown"
+        price = item.get("price")
+        if price is not None:
+            lines.append(f"{index}. {name} - {money(price)}")
+        else:
+            lines.append(f"{index}. {name} - unavailable ({status})")
+
+    return "\n".join(lines)
+
+
 def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, str]], notifications: List[str]):
     url = normalize_product_url(url)
     if url in existing_urls:
@@ -617,8 +653,7 @@ def process_telegram_commands() -> List[str]:
             continue
 
         if lowered.startswith("/list"):
-            notifications.append("Here is your tracked product list from this run:")
-            notifications.append(build_tracked_products_message())
+            notifications.append(build_latest_prices_message())
             continue
 
         if lowered.startswith("/run"):
@@ -766,7 +801,17 @@ def main():
             if previous is None:
                 alerts.append(format_alert_message("✅", "First price detected", name, [f"Current: {money(current)}"], url))
             elif current < previous:
-                alerts.append(format_alert_message("🔥", "Price dropped", name, [f"Old: {money(previous)}", f"New: {money(current)}"], url))
+                drop_pct = ((previous - current) / previous * 100) if previous else 0
+                if drop_pct >= PERCENT_DROP_ALERT_THRESHOLD:
+                    alerts.append(
+                        format_alert_message(
+                            "🔥",
+                            f"Price dropped {drop_pct:.1f}%",
+                            name,
+                            [f"Old: {money(previous)}", f"New: {money(current)}"],
+                            url,
+                        )
+                    )
             elif target is not None and current <= float(target):
                 alerts.append(
                     format_alert_message(
