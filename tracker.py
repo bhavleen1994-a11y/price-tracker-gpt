@@ -74,7 +74,14 @@ def save_products_csv(path: Path, rows: List[Dict[str, Any]]):
         writer = csv.DictWriter(handle, fieldnames=["product_name", "retailer", "url", "target_price"])
         writer.writeheader()
         for row in rows:
-            writer.writerow(row)
+            writer.writerow(
+                {
+                    "product_name": row.get("product_name") or row.get("name") or "",
+                    "retailer": row.get("retailer") or "",
+                    "url": row.get("url") or "",
+                    "target_price": row.get("target_price") if row.get("target_price") is not None else "",
+                }
+            )
 
 
 def load_products_csv(path: Path) -> List[Dict[str, Any]]:
