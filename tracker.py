@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 PRODUCTS_FILE = Path("products.json")
 PRODUCTS_CSV_FILE = Path("products.csv")
 STATE_FILE = Path("data/prices.json")
+BOT_STATE_FILE = Path("data/bot_state.json")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
@@ -44,6 +45,7 @@ VISIBLE_PRICE_SELECTORS = [
 ]
 PRICE_CONTEXT_WORDS = ("price", "now", "sale", "our price", "add to cart", "buy now")
 PRICE_IGNORE_WORDS = ("rrp", "was", "save", "off", "afterpay", "zip", "clearance")
+URL_PATTERN = re.compile(r"https?://[^\s<>()\"]+", flags=re.I)
 
 
 def load_json(path: Path, default):
@@ -64,6 +66,15 @@ def load_products() -> List[Dict[str, Any]]:
     if PRODUCTS_CSV_FILE.exists():
         return load_products_csv(PRODUCTS_CSV_FILE)
     return load_json(PRODUCTS_FILE, [])
+
+
+def save_products_csv(path: Path, rows: List[Dict[str, Any]]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["product_name", "retailer", "url", "target_price"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
 
 def load_products_csv(path: Path) -> List[Dict[str, Any]]:
@@ -288,6 +299,181 @@ def fetch_chemist_warehouse(session: requests.Session, url: str) -> requests.Res
     return last_response
 
 
+def fetch_page(url: str) -> requests.Response:
+    domain = get_domain(url)
+    with requests.Session() as session:
+        if "chemistwarehouse.com.au" in domain:
+            return fetch_chemist_warehouse(session, url)
+        return fetch_with_session(session, url, HEADERS)
+
+
+def infer_retailer_name(url: str) -> str:
+    hostname = get_domain(url)
+    custom_names = {
+        "www.jbhifi.com.au": "JB Hi-Fi",
+        "www.chemistwarehouse.com.au": "Chemist Warehouse",
+        "www.kathmandu.com.au": "Kathmandu",
+        "www.columbiasportswear.com.au": "Columbia",
+    }
+    if hostname in custom_names:
+        return custom_names[hostname]
+    host = hostname.replace("www.", "").split(".")[0]
+    return host.replace("-", " ").title() if host else "Store"
+
+
+def infer_product_name(url: str, html: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+    meta_title = soup.find("meta", attrs={"property": "og:title"}) or soup.find("meta", attrs={"name": "twitter:title"})
+    if meta_title and meta_title.get("content"):
+        return meta_title["content"].strip()
+
+    h1 = soup.find("h1")
+    if h1:
+        text = h1.get_text(" ", strip=True)
+        if text:
+            return text
+
+    if soup.title and soup.title.string:
+        title = re.sub(r"\s+", " ", soup.title.string).strip()
+        title = re.split(r"\s+[|\-–]\s+", title)[0].strip()
+        if title:
+            return title
+
+    path_name = urlparse(url).path.rsplit("/", 1)[-1].replace("-", " ").strip()
+    return path_name.title() if path_name else "New Product"
+
+
+def extract_message_text(update: Dict[str, Any]) -> str:
+    message = update.get("message") or update.get("edited_message") or {}
+    return (message.get("text") or message.get("caption") or "").strip()
+
+
+def extract_urls_from_text(text: str) -> List[str]:
+    return [match.rstrip(".,)") for match in URL_PATTERN.findall(text)]
+
+
+def get_telegram_credentials() -> Tuple[Optional[str], Optional[str]]:
+    return os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+
+
+def telegram_request(method: str, payload: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    token, _ = get_telegram_credentials()
+    if not token:
+        return None
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    response = requests.post(url, data=payload or {}, timeout=20)
+    if response.status_code >= 400:
+        print(f"Telegram API error for {method}: {response.status_code} {response.text}")
+        return None
+    try:
+        return response.json()
+    except Exception:
+        return None
+
+
+def send_telegram(message: str):
+    _, chat_id = get_telegram_credentials()
+    if not chat_id:
+        print("Telegram secrets missing. Skipping alert.")
+        return
+    telegram_request(
+        "sendMessage",
+        {"chat_id": chat_id, "text": message, "disable_web_page_preview": False},
+    )
+
+
+def build_tracked_products_message() -> str:
+    rows = load_products_csv(PRODUCTS_CSV_FILE) if PRODUCTS_CSV_FILE.exists() else []
+    if not rows:
+        return "No products are being tracked yet. Send me a product link and I will add it."
+
+    lines = ["Tracked products:"]
+    for index, row in enumerate(rows, start=1):
+        retailer = row.get("retailer") or "Store"
+        lines.append(f"{index}. {row['name']} [{retailer}]")
+        lines.append(row["url"])
+    return "\n".join(lines)
+
+
+def process_telegram_commands() -> List[str]:
+    token, chat_id = get_telegram_credentials()
+    if not token or not chat_id:
+        print("Telegram secrets missing. Skipping Telegram inbox processing.")
+        return []
+
+    bot_state = load_json(BOT_STATE_FILE, {"last_update_id": 0})
+    result = telegram_request("getUpdates", {"offset": bot_state.get("last_update_id", 0) + 1, "timeout": 0})
+    updates = result.get("result", []) if result else []
+    if not updates:
+        return []
+
+    csv_rows = load_products_csv(PRODUCTS_CSV_FILE) if PRODUCTS_CSV_FILE.exists() else []
+    existing_urls = {row["url"] for row in csv_rows}
+    notifications = []
+
+    for update in updates:
+        bot_state["last_update_id"] = max(bot_state.get("last_update_id", 0), update.get("update_id", 0))
+        message = update.get("message") or update.get("edited_message") or {}
+        sender_chat_id = str(message.get("chat", {}).get("id", ""))
+        if sender_chat_id != str(chat_id):
+            continue
+
+        text = extract_message_text(update)
+        if not text:
+            continue
+
+        lowered = text.lower()
+
+        if lowered.startswith("/start") or lowered.startswith("/help"):
+            notifications.append(
+                "Send me a product link and I will add it to the tracker automatically.\n\n"
+                "Commands:\n"
+                "/help - show instructions\n"
+                "/list - show tracked products"
+            )
+            continue
+
+        if lowered.startswith("/list"):
+            notifications.append(build_tracked_products_message())
+            continue
+
+        urls = extract_urls_from_text(text)
+        if not urls:
+            notifications.append("I could not find a product link in your message. Send a full product URL.")
+            continue
+
+        for url in urls:
+            if url in existing_urls:
+                notifications.append(f"Already tracking this link:\n{url}")
+                continue
+
+            try:
+                response = fetch_page(url)
+                if response.status_code >= 400:
+                    notifications.append(f"I could not add this link yet because the store returned {response.status_code}:\n{url}")
+                    continue
+
+                product_name = infer_product_name(url, response.text)
+                retailer = infer_retailer_name(url)
+                csv_rows.append(
+                    {
+                        "product_name": product_name,
+                        "retailer": retailer,
+                        "url": url,
+                        "target_price": "",
+                    }
+                )
+                existing_urls.add(url)
+                notifications.append(f"Added to tracker:\n{product_name}\nStore: {retailer}\n{url}")
+                print(f"[ADDED] {product_name} | retailer={retailer} | url={url}")
+            except Exception as exc:
+                notifications.append(f"I could not add this link because of an error:\n{url}\n{type(exc).__name__}: {exc}")
+
+    save_products_csv(PRODUCTS_CSV_FILE, csv_rows)
+    save_json(BOT_STATE_FILE, bot_state)
+    return notifications
+
+
 def extract_price(soup: BeautifulSoup, html: str, url: str) -> Tuple[Optional[float], Optional[str]]:
     domain = get_domain(url)
     extractors = [
@@ -313,13 +499,8 @@ def extract_price(soup: BeautifulSoup, html: str, url: str) -> Tuple[Optional[fl
 
 
 def fetch_price(url: str) -> Dict[str, Any]:
-    domain = get_domain(url)
     try:
-        with requests.Session() as session:
-            if "chemistwarehouse.com.au" in domain:
-                r = fetch_chemist_warehouse(session, url)
-            else:
-                r = fetch_with_session(session, url, HEADERS)
+        r = fetch_page(url)
         status = r.status_code
         html = r.text
         if status >= 400:
@@ -329,18 +510,6 @@ def fetch_price(url: str) -> Dict[str, Any]:
         return {"price": price, "source": source, "status": "ok" if price is not None else "price_not_found"}
     except Exception as e:
         return {"price": None, "source": None, "status": f"error: {type(e).__name__}: {e}"}
-
-
-def send_telegram(message: str):
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        print("Telegram secrets missing. Skipping alert.")
-        return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    resp = requests.post(url, data={"chat_id": chat_id, "text": message, "disable_web_page_preview": False}, timeout=20)
-    if resp.status_code >= 400:
-        print("Telegram error:", resp.status_code, resp.text)
 
 
 def money(p: Optional[float]) -> str:
@@ -387,6 +556,7 @@ def normalize_products(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def main():
+    inbox_notifications = process_telegram_commands()
     products = normalize_products(load_products())
     state = load_json(STATE_FILE, {})
     now = datetime.now(timezone.utc).isoformat()
@@ -440,8 +610,14 @@ def main():
     save_json(STATE_FILE, state)
     print(f"Finished. Success: {success_count}, Failed: {failure_count}, Alerts: {len(alerts)}")
 
+    outgoing_messages = []
+    if inbox_notifications:
+        outgoing_messages.append("\n\n---\n\n".join(inbox_notifications))
     if alerts:
-        send_telegram("\n\n---\n\n".join(alerts))
+        outgoing_messages.append("\n\n---\n\n".join(alerts))
+
+    if outgoing_messages:
+        send_telegram("\n\n==========\n\n".join(outgoing_messages))
     else:
         print("No alerts to send.")
 
