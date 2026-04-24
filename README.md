@@ -23,7 +23,7 @@ It is designed to run automatically in GitHub Actions, so you do not need to kee
 5. Open the **Actions** tab.
 6. Open the **Price Tracker** workflow.
 7. Click **Run workflow** to test it once.
-8. After that, GitHub Actions will run it automatically every 5 minutes.
+8. After that, GitHub Actions will run it automatically every hour.
 
 ## How To Use It
 
@@ -76,7 +76,7 @@ If you want to test the tracker any time:
 
 The logs now show which products succeeded, which failed, and where the price was found.
 
-The automatic workflow now runs every 5 minutes, so Telegram commands feel much closer to instant.
+The automatic workflow now runs every hour. If you want an immediate check, you can still run the workflow manually from GitHub Actions.
 
 ## Files In This Repo
 
