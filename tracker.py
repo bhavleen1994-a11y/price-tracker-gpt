@@ -398,7 +398,26 @@ def build_tracked_products_message() -> str:
     for index, row in enumerate(rows, start=1):
         retailer = row.get("retailer") or "Store"
         lines.append(f"{index}. {row['name']} [{retailer}]")
-        lines.append(row["url"])
+    return "\n".join(lines)
+
+
+def format_added_message(product_name: str, retailer: str, url: str) -> str:
+    return f"Added:\n- {product_name}\n- Store: {retailer}\n- Link: {url}"
+
+
+def format_alert_message(icon: str, label: str, name: str, price_lines: List[str], url: str) -> str:
+    lines = [f"{icon} {label}", name]
+    lines.extend(price_lines)
+    lines.append(url)
+    return "\n".join(lines)
+
+
+def format_failure_summary(failures: List[Dict[str, str]]) -> str:
+    if not failures:
+        return ""
+    lines = ["Could not fetch these products:"]
+    for item in failures:
+        lines.append(f"- {item['name']}: {item['status']}")
     return "\n".join(lines)
 
 
@@ -424,7 +443,7 @@ def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, 
             }
         )
         existing_urls.add(url)
-        notifications.append(f"Added to tracker:\n{product_name}\nStore: {retailer}\n{url}")
+        notifications.append(format_added_message(product_name, retailer, url))
         print(f"[ADDED] {product_name} | retailer={retailer} | url={url}")
     except Exception as exc:
         notifications.append(f"I could not add this link because of an error:\n{url}\n{type(exc).__name__}: {exc}")
@@ -475,7 +494,7 @@ def process_telegram_commands() -> List[str]:
             continue
 
         if lowered.startswith("/run"):
-            notifications.append("Okay. I will process your tracker on the next automatic run. The workflow now checks every 5 minutes.")
+            notifications.append("Okay. I will process your tracker on the next automatic run. The workflow now checks every hour.")
             continue
 
         if lowered.startswith("/add"):
@@ -587,6 +606,7 @@ def main():
     state = load_json(STATE_FILE, {})
     now = datetime.now(timezone.utc).isoformat()
     alerts = []
+    failures = []
     success_count = 0
     failure_count = 0
 
@@ -612,14 +632,23 @@ def main():
         else:
             failure_count += 1
             print(f"[FAILED] {name} | source={source or 'none'} | status={result['status']} | url={url}")
+            failures.append({"name": name, "status": result["status"], "url": url})
 
         if current is not None:
             if previous is None:
-                alerts.append(f"✅ First price detected\n{name}\nCurrent: {money(current)}\n{url}")
+                alerts.append(format_alert_message("✅", "First price detected", name, [f"Current: {money(current)}"], url))
             elif current < previous:
-                alerts.append(f"🔥 PRICE DROP ALERT\n{name}\nOld: {money(previous)}\nNew: {money(current)}\n{url}")
+                alerts.append(format_alert_message("🔥", "Price dropped", name, [f"Old: {money(previous)}", f"New: {money(current)}"], url))
             elif target is not None and current <= float(target):
-                alerts.append(f"🎯 TARGET PRICE HIT\n{name}\nTarget: {money(float(target))}\nCurrent: {money(current)}\n{url}")
+                alerts.append(
+                    format_alert_message(
+                        "🎯",
+                        "Target price hit",
+                        name,
+                        [f"Target: {money(float(target))}", f"Current: {money(current)}"],
+                        url,
+                    )
+                )
 
         state[key] = {
             "group_name": product.get("group_name"),
@@ -641,6 +670,9 @@ def main():
         outgoing_messages.append("\n\n---\n\n".join(inbox_notifications))
     if alerts:
         outgoing_messages.append("\n\n---\n\n".join(alerts))
+    failure_summary = format_failure_summary(failures)
+    if failure_summary:
+        outgoing_messages.append(failure_summary)
 
     if outgoing_messages:
         send_telegram("\n\n==========\n\n".join(outgoing_messages))
