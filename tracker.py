@@ -3,7 +3,7 @@ import os
 import re
 import time
 import csv
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
@@ -54,6 +54,8 @@ SUPPORTED_RETAILERS = {
     "The Good Guys": "thegoodguys.com.au",
     "Big W": "bigw.com.au",
     "Myer": "myer.com.au",
+    "Kmart": "kmart.com.au",
+    "eBay": "ebay.com.au",
     "Anaconda": "anacondastores.com",
     "BCF": "bcf.com.au",
     "Kathmandu": "kathmandu.com.au",
@@ -279,6 +281,12 @@ def get_domain(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
+def normalize_product_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    cleaned = parsed._replace(params="", query="", fragment="")
+    return urlunparse(cleaned)
+
+
 def build_failure_status(response: requests.Response) -> str:
     title = ""
     if response.text:
@@ -336,6 +344,8 @@ def infer_retailer_name(url: str) -> str:
     custom_names = {
         "www.jbhifi.com.au": "JB Hi-Fi",
         "www.chemistwarehouse.com.au": "Chemist Warehouse",
+        "www.kmart.com.au": "Kmart",
+        "www.ebay.com.au": "eBay",
         "www.kathmandu.com.au": "Kathmandu",
         "www.columbiasportswear.com.au": "Columbia",
     }
@@ -524,6 +534,7 @@ def format_discovery_message(product_name: str, discovered: List[Dict[str, str]]
 
 
 def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, str]], notifications: List[str]):
+    url = normalize_product_url(url)
     if url in existing_urls:
         notifications.append(f"Already tracking this link:\n{url}")
         return
