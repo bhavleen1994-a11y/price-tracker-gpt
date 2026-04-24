@@ -506,7 +506,7 @@ def build_tracked_products_message() -> str:
 
 
 def format_added_message(product_name: str, retailer: str, url: str) -> str:
-    return f"Added:\n- {product_name}\n- Store: {retailer}\n- Link: {url}"
+    return f"Added: {product_name} [{retailer}]"
 
 
 def format_alert_message(icon: str, label: str, name: str, price_lines: List[str], url: str) -> str:
@@ -519,18 +519,18 @@ def format_alert_message(icon: str, label: str, name: str, price_lines: List[str
 def format_failure_summary(failures: List[Dict[str, str]]) -> str:
     if not failures:
         return ""
-    lines = ["Could not fetch these products:"]
+    lines = ["Unavailable right now:"]
     for item in failures:
-        lines.append(f"- {item['name']}: {item['status']}")
+        lines.append(f"- {item['name']}")
     return "\n".join(lines)
 
 
 def format_discovery_message(product_name: str, discovered: List[Dict[str, str]]) -> str:
     if not discovered:
-        return f"No matching links found yet for:\n- {product_name}"
-    lines = [f"Also found possible matches for:", f"- {product_name}"]
+        return ""
+    lines = [f"Also found matches for {product_name}:"]
     for item in discovered:
-        lines.append(f"- {item['retailer']}: {item['url']}")
+        lines.append(f"- {item['retailer']}")
     return "\n".join(lines)
 
 
@@ -559,12 +559,11 @@ def build_latest_prices_message() -> str:
 
     for index, item in enumerate(entries, start=1):
         name = item.get("name") or "Product"
-        status = item.get("status") or "unknown"
         price = item.get("price")
         if price is not None:
             lines.append(f"{index}. {name} - {money(price)}")
         else:
-            lines.append(f"{index}. {name} - unavailable ({status})")
+            lines.append(f"{index}. {name} - unavailable")
 
     return "\n".join(lines)
 
@@ -612,21 +611,22 @@ def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, 
         notifications.append(f"I could not add this link because of an error:\n{url}\n{type(exc).__name__}: {exc}")
 
 
-def process_telegram_commands() -> List[str]:
+def process_telegram_commands() -> Tuple[List[str], bool]:
     token, chat_id = get_telegram_credentials()
     if not token or not chat_id:
         print("Telegram secrets missing. Skipping Telegram inbox processing.")
-        return []
+        return [], False
 
     bot_state = load_json(BOT_STATE_FILE, {"last_update_id": 0})
     result = telegram_request("getUpdates", {"offset": bot_state.get("last_update_id", 0) + 1, "timeout": 0})
     updates = result.get("result", []) if result else []
     if not updates:
-        return []
+        return [], False
 
     csv_rows = load_products_csv(PRODUCTS_CSV_FILE) if PRODUCTS_CSV_FILE.exists() else []
     existing_urls = {row["url"] for row in csv_rows}
     notifications = []
+    list_requested = False
 
     for update in updates:
         bot_state["last_update_id"] = max(bot_state.get("last_update_id", 0), update.get("update_id", 0))
@@ -643,27 +643,27 @@ def process_telegram_commands() -> List[str]:
 
         if lowered.startswith("/start") or lowered.startswith("/help"):
             notifications.append(
-                "Send me a product link and I will add it to the tracker automatically.\n\n"
+                "Send me a product link and I will add it automatically.\n\n"
                 "Commands:\n"
-                "/help - show instructions\n"
+                "/help - instructions\n"
                 "/add <url> - add a product link\n"
-                "/list - show tracked products\n"
-                "/run - check everything on the next scheduled cycle"
+                "/list - latest prices\n"
+                "/run - check on the next cycle"
             )
             continue
 
         if lowered.startswith("/list"):
-            notifications.append(build_latest_prices_message())
+            list_requested = True
             continue
 
         if lowered.startswith("/run"):
-            notifications.append("Okay. I will process your tracker on the next automatic run. The workflow now checks every hour.")
+            notifications.append("Okay. I will check again on the next hourly run.")
             continue
 
         if lowered.startswith("/add"):
             urls = extract_urls_from_text(text)
             if not urls:
-                notifications.append("Use /add followed by a full product link.\nExample:\n/add https://example.com/product")
+                notifications.append("Use /add followed by a full product link.")
                 continue
             for url in urls:
                 add_product_from_url(url, existing_urls, csv_rows, notifications)
@@ -679,7 +679,7 @@ def process_telegram_commands() -> List[str]:
 
     save_products_csv(PRODUCTS_CSV_FILE, csv_rows)
     save_json(BOT_STATE_FILE, bot_state)
-    return notifications
+    return notifications, list_requested
 
 
 def extract_price(soup: BeautifulSoup, html: str, url: str) -> Tuple[Optional[float], Optional[str]]:
@@ -764,7 +764,7 @@ def normalize_products(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def main():
-    inbox_notifications = process_telegram_commands()
+    inbox_notifications, list_requested = process_telegram_commands()
     products = normalize_products(load_products())
     state = load_json(STATE_FILE, {})
     now = datetime.now(timezone.utc).isoformat()
@@ -841,6 +841,8 @@ def main():
     outgoing_messages = []
     if inbox_notifications:
         outgoing_messages.append("\n\n---\n\n".join(inbox_notifications))
+    if list_requested:
+        outgoing_messages.append(build_latest_prices_message())
     if alerts:
         outgoing_messages.append("\n\n---\n\n".join(alerts))
     failure_summary = format_failure_summary(failures)
