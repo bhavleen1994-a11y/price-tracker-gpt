@@ -28,7 +28,9 @@ It is designed to run automatically in GitHub Actions, so you do not need to kee
 
 Open `products.json` and add or remove products.
 
-Optional target price example:
+### Single store product
+
+This is the simple format you are already using:
 
 ```json
 {
@@ -38,11 +40,46 @@ Optional target price example:
 }
 ```
 
+### Same product on multiple stores
+
+Use `offers` when you want to track the same item across different websites:
+
+```json
+{
+  "name": "CeraVe Daily Moisturising Lotion 473ml",
+  "target_price": 18.99,
+  "offers": [
+    {
+      "retailer": "Chemist Warehouse",
+      "url": "https://www.chemistwarehouse.com.au/buy/91317/cerave-daily-moisturising-lotion-473ml"
+    },
+    {
+      "retailer": "Priceline",
+      "url": "https://www.example.com/priceline-cerave-page"
+    },
+    {
+      "retailer": "Amazon AU",
+      "url": "https://www.example.com/amazon-cerave-page"
+    }
+  ]
+}
+```
+
 Notes:
 
 - `name`: The label you want to see in Telegram
-- `url`: The product page URL
-- `target_price`: Optional. Leave it as `null` if you only want alerts for first detection or price drops
+- `url`: The product page URL for a single-store item
+- `offers`: Use this instead of `url` when one product should be checked on multiple stores
+- `retailer`: Optional but recommended when using `offers`, so alerts show which store matched
+- `target_price`: Optional. Leave it as `null` if you only want alerts for first detection or price drops. You can set it at the product level or per offer.
+
+### How to add a new product
+
+1. Find the direct product page URL.
+2. Copy the product name you want in Telegram.
+3. Add a new item in `products.json`.
+4. If you want to compare multiple stores, use one `name` with several entries inside `offers`.
+5. Run the GitHub Action manually once to test it.
 
 ## How Alerts Work
 
@@ -63,6 +100,8 @@ If you want to test the tracker any time:
 5. Open the latest run to see the log output.
 
 The logs now show which products succeeded, which failed, and where the price was found.
+
+For multi-store products, each retailer is checked separately and logged separately.
 
 ## Files In This Repo
 

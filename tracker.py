@@ -319,15 +319,54 @@ def money(p: Optional[float]) -> str:
     return "N/A" if p is None else f"${p:,.2f}"
 
 
+def build_display_name(product_name: str, retailer: Optional[str]) -> str:
+    return f"{product_name} [{retailer}]" if retailer else product_name
+
+
+def normalize_products(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized = []
+
+    for product in products:
+        product_name = product["name"]
+        product_target = product.get("target_price")
+        offers = product.get("offers")
+
+        if offers:
+            for offer in offers:
+                retailer = offer.get("retailer")
+                normalized.append(
+                    {
+                        "group_name": product_name,
+                        "name": build_display_name(product_name, retailer),
+                        "retailer": retailer,
+                        "url": offer["url"],
+                        "target_price": offer.get("target_price", product_target),
+                    }
+                )
+            continue
+
+        normalized.append(
+            {
+                "group_name": product_name,
+                "name": build_display_name(product_name, product.get("retailer")),
+                "retailer": product.get("retailer"),
+                "url": product["url"],
+                "target_price": product_target,
+            }
+        )
+
+    return normalized
+
+
 def main():
-    products = load_json(PRODUCTS_FILE, [])
+    products = normalize_products(load_json(PRODUCTS_FILE, []))
     state = load_json(STATE_FILE, {})
     now = datetime.now(timezone.utc).isoformat()
     alerts = []
     success_count = 0
     failure_count = 0
 
-    print(f"Checking {len(products)} products at {now}")
+    print(f"Checking {len(products)} product offers at {now}")
 
     for index, product in enumerate(products, start=1):
         name = product["name"]
@@ -359,7 +398,9 @@ def main():
                 alerts.append(f"🎯 TARGET PRICE HIT\n{name}\nTarget: {money(float(target))}\nCurrent: {money(current)}\n{url}")
 
         state[key] = {
+            "group_name": product.get("group_name"),
             "name": name,
+            "retailer": product.get("retailer"),
             "url": url,
             "price": current,
             "previous_price": previous,
