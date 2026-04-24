@@ -547,8 +547,8 @@ def format_checked_time(timestamp: str) -> str:
         return timestamp
 
 
-def build_latest_prices_message() -> str:
-    state = load_json(STATE_FILE, {})
+def build_latest_prices_message(state: Optional[Dict[str, Any]] = None) -> str:
+    state = state if state is not None else load_json(STATE_FILE, {})
     if not state:
         return "No prices saved yet."
 
@@ -843,7 +843,7 @@ def main():
     if inbox_notifications:
         outgoing_messages.append("\n\n---\n\n".join(inbox_notifications))
     if list_requested:
-        outgoing_messages.append(build_latest_prices_message())
+        outgoing_messages.append(build_latest_prices_message(state))
     if alerts:
         outgoing_messages.append("\n\n---\n\n".join(alerts))
     failure_summary = format_failure_summary(failures)
