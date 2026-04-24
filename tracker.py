@@ -496,9 +496,9 @@ def send_telegram(message: str):
 def build_tracked_products_message() -> str:
     rows = load_products_csv(PRODUCTS_CSV_FILE) if PRODUCTS_CSV_FILE.exists() else []
     if not rows:
-        return "No products are being tracked yet. Send me a product link and I will add it."
+        return "No products tracked yet."
 
-    lines = ["Tracked products:"]
+    lines = ["Tracked:"]
     for index, row in enumerate(rows, start=1):
         retailer = row.get("retailer") or "Store"
         lines.append(f"{index}. {row['name']} [{retailer}]")
@@ -510,16 +510,13 @@ def format_added_message(product_name: str, retailer: str, url: str) -> str:
 
 
 def format_alert_message(icon: str, label: str, name: str, price_lines: List[str], url: str) -> str:
-    lines = [f"{icon} {label}", name]
-    lines.extend(price_lines)
-    lines.append(url)
-    return "\n".join(lines)
+    return f"{icon} {name}\n" + " | ".join(price_lines)
 
 
 def format_failure_summary(failures: List[Dict[str, str]]) -> str:
     if not failures:
         return ""
-    lines = ["Unavailable right now:"]
+    lines = ["Unavailable:"]
     for item in failures:
         lines.append(f"- {item['name']}")
     return "\n".join(lines)
@@ -528,7 +525,7 @@ def format_failure_summary(failures: List[Dict[str, str]]) -> str:
 def format_discovery_message(product_name: str, discovered: List[Dict[str, str]]) -> str:
     if not discovered:
         return ""
-    lines = [f"Also found matches for {product_name}:"]
+    lines = [f"Matches found for {product_name}:"]
     for item in discovered:
         lines.append(f"- {item['retailer']}")
     return "\n".join(lines)
@@ -548,7 +545,7 @@ def format_checked_time(timestamp: str) -> str:
 def build_latest_prices_message() -> str:
     state = load_json(STATE_FILE, {})
     if not state:
-        return "No saved prices yet. Run the workflow first, then try /list again."
+        return "No prices saved yet."
 
     entries = sorted(
         state.values(),
@@ -561,9 +558,9 @@ def build_latest_prices_message() -> str:
         name = item.get("name") or "Product"
         price = item.get("price")
         if price is not None:
-            lines.append(f"{index}. {name} - {money(price)}")
+            lines.append(f"{index}. {name}: {money(price)}")
         else:
-            lines.append(f"{index}. {name} - unavailable")
+            lines.append(f"{index}. {name}: unavailable")
 
     return "\n".join(lines)
 
@@ -592,7 +589,7 @@ def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, 
         print(f"[ADDED] {product_name} | retailer={retailer} | url={url}")
 
         if response.status_code >= 400:
-            notifications.append(f"Note:\n- {retailer} blocked this product page right now with HTTP {response.status_code}")
+            notifications.append(f"Blocked right now: {product_name} [{retailer}]")
 
         discovered = discover_other_store_links(product_name, url, retailer, existing_urls)
         for item in discovered:
@@ -643,12 +640,11 @@ def process_telegram_commands() -> Tuple[List[str], bool]:
 
         if lowered.startswith("/start") or lowered.startswith("/help"):
             notifications.append(
-                "Send me a product link and I will add it automatically.\n\n"
+                "Send a product link and I will track it.\n\n"
                 "Commands:\n"
-                "/help - instructions\n"
-                "/add <url> - add a product link\n"
+                "/add <url> - add product\n"
                 "/list - latest prices\n"
-                "/run - check on the next cycle"
+                "/run - check next cycle"
             )
             continue
 
@@ -657,13 +653,13 @@ def process_telegram_commands() -> Tuple[List[str], bool]:
             continue
 
         if lowered.startswith("/run"):
-            notifications.append("Okay. I will check again on the next hourly run.")
+            notifications.append("Okay. I will check on the next hourly run.")
             continue
 
         if lowered.startswith("/add"):
             urls = extract_urls_from_text(text)
             if not urls:
-                notifications.append("Use /add followed by a full product link.")
+                notifications.append("Use /add with a full product link.")
                 continue
             for url in urls:
                 add_product_from_url(url, existing_urls, csv_rows, notifications)
@@ -671,7 +667,7 @@ def process_telegram_commands() -> Tuple[List[str], bool]:
 
         urls = extract_urls_from_text(text)
         if not urls:
-            notifications.append("I could not find a product link in your message. Send a full product URL.")
+            notifications.append("No product link found.")
             continue
 
         for url in urls:
