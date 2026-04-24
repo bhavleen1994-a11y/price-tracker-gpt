@@ -46,6 +46,23 @@ VISIBLE_PRICE_SELECTORS = [
 PRICE_CONTEXT_WORDS = ("price", "now", "sale", "our price", "add to cart", "buy now")
 PRICE_IGNORE_WORDS = ("rrp", "was", "save", "off", "afterpay", "zip", "clearance")
 URL_PATTERN = re.compile(r"https?://[^\s<>()\"]+", flags=re.I)
+SUPPORTED_RETAILERS = {
+    "Chemist Warehouse": "chemistwarehouse.com.au",
+    "Priceline": "priceline.com.au",
+    "Amazon AU": "amazon.com.au",
+    "JB Hi-Fi": "jbhifi.com.au",
+    "The Good Guys": "thegoodguys.com.au",
+    "Big W": "bigw.com.au",
+    "Myer": "myer.com.au",
+    "Anaconda": "anacondastores.com",
+    "BCF": "bcf.com.au",
+    "Kathmandu": "kathmandu.com.au",
+    "Columbia": "columbiasportswear.com.au",
+    "Harvey Norman": "harveynorman.com.au",
+    "Officeworks": "officeworks.com.au",
+    "Nike": "nike.com",
+    "Adidas": "adidas.com.au",
+}
 
 
 def load_json(path: Path, default):
@@ -328,6 +345,82 @@ def infer_retailer_name(url: str) -> str:
     return host.replace("-", " ").title() if host else "Store"
 
 
+def tokenize_text(text: str) -> set:
+    return {token for token in re.findall(r"[a-z0-9]+", text.lower()) if len(token) > 1}
+
+
+def similarity_score(left: str, right: str) -> float:
+    left_tokens = tokenize_text(left)
+    right_tokens = tokenize_text(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    overlap = left_tokens & right_tokens
+    return len(overlap) / max(len(left_tokens), 1)
+
+
+def looks_like_product_url(url: str) -> bool:
+    lowered = url.lower()
+    blocked_parts = ["/search", "/catalogsearch", "/s?", "/w?", "/search?", "/collections", "/brand/"]
+    return not any(part in lowered for part in blocked_parts)
+
+
+def search_store_candidates(product_name: str, retailer: str, domain: str) -> List[Dict[str, str]]:
+    query = f'site:{domain} "{product_name}"'
+    response = requests.get(
+        "https://html.duckduckgo.com/html/",
+        params={"q": query},
+        headers=HEADERS,
+        timeout=25,
+    )
+    if response.status_code >= 400:
+        print(f"[DISCOVERY-FAILED] {retailer} | search_status=HTTP {response.status_code}")
+        return []
+
+    soup = BeautifulSoup(response.text, "lxml")
+    candidates = []
+    seen_urls = set()
+    for link in soup.select("a.result__a, a[data-testid='result-title-a']"):
+        href = (link.get("href") or "").strip()
+        title = link.get_text(" ", strip=True)
+        if not href or domain not in href or href in seen_urls:
+            continue
+        if not looks_like_product_url(href):
+            continue
+        score = similarity_score(product_name, title)
+        if score < 0.35:
+            continue
+        seen_urls.add(href)
+        candidates.append({"retailer": retailer, "url": href, "title": title, "score": f"{score:.2f}"})
+        if len(candidates) >= 2:
+            break
+    return candidates
+
+
+def discover_other_store_links(product_name: str, source_url: str, source_retailer: str, existing_urls: set) -> List[Dict[str, str]]:
+    discovered = []
+    source_domain = get_domain(source_url)
+
+    for retailer, domain in SUPPORTED_RETAILERS.items():
+        if retailer == source_retailer:
+            continue
+        if domain in source_domain:
+            continue
+        try:
+            candidates = search_store_candidates(product_name, retailer, domain)
+        except Exception as exc:
+            print(f"[DISCOVERY-ERROR] {retailer} | {type(exc).__name__}: {exc}")
+            continue
+
+        for candidate in candidates:
+            if candidate["url"] in existing_urls:
+                continue
+            discovered.append(candidate)
+            existing_urls.add(candidate["url"])
+            break
+
+    return discovered
+
+
 def infer_product_name(url: str, html: str) -> str:
     soup = BeautifulSoup(html, "lxml")
     meta_title = soup.find("meta", attrs={"property": "og:title"}) or soup.find("meta", attrs={"name": "twitter:title"})
@@ -421,6 +514,15 @@ def format_failure_summary(failures: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def format_discovery_message(product_name: str, discovered: List[Dict[str, str]]) -> str:
+    if not discovered:
+        return f"No matching links found yet for:\n- {product_name}"
+    lines = [f"Also found possible matches for:", f"- {product_name}"]
+    for item in discovered:
+        lines.append(f"- {item['retailer']}: {item['url']}")
+    return "\n".join(lines)
+
+
 def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, str]], notifications: List[str]):
     if url in existing_urls:
         notifications.append(f"Already tracking this link:\n{url}")
@@ -428,12 +530,9 @@ def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, 
 
     try:
         response = fetch_page(url)
-        if response.status_code >= 400:
-            notifications.append(f"I could not add this link yet because the store returned {response.status_code}:\n{url}")
-            return
-
-        product_name = infer_product_name(url, response.text)
         retailer = infer_retailer_name(url)
+        html = response.text if response.status_code < 400 else ""
+        product_name = infer_product_name(url, html)
         csv_rows.append(
             {
                 "product_name": product_name,
@@ -445,6 +544,23 @@ def add_product_from_url(url: str, existing_urls: set, csv_rows: List[Dict[str, 
         existing_urls.add(url)
         notifications.append(format_added_message(product_name, retailer, url))
         print(f"[ADDED] {product_name} | retailer={retailer} | url={url}")
+
+        if response.status_code >= 400:
+            notifications.append(f"Note:\n- {retailer} blocked this product page right now with HTTP {response.status_code}")
+
+        discovered = discover_other_store_links(product_name, url, retailer, existing_urls)
+        for item in discovered:
+            csv_rows.append(
+                {
+                    "product_name": product_name,
+                    "retailer": item["retailer"],
+                    "url": item["url"],
+                    "target_price": "",
+                }
+            )
+            print(f"[DISCOVERED] {product_name} | retailer={item['retailer']} | url={item['url']}")
+
+        notifications.append(format_discovery_message(product_name, discovered))
     except Exception as exc:
         notifications.append(f"I could not add this link because of an error:\n{url}\n{type(exc).__name__}: {exc}")
 
@@ -490,6 +606,7 @@ def process_telegram_commands() -> List[str]:
             continue
 
         if lowered.startswith("/list"):
+            notifications.append("Here is your tracked product list from this run:")
             notifications.append(build_tracked_products_message())
             continue
 
