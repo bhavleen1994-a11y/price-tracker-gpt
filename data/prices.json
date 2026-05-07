@@ -8,7 +8,7 @@
     "previous_price": 1399.0,
     "source": "json_ld",
     "status": "ok",
-    "checked_at": "2026-05-07T05:55:07.762171+00:00"
+    "checked_at": "2026-05-07T08:22:58.201640+00:00"
   },
   "https://www.chemistwarehouse.com.au/buy/91317/cerave-daily-moisturising-lotion-473ml": {
     "group_name": "CeraVe Daily Moisturising Lotion 473ml",
@@ -19,7 +19,7 @@
     "previous_price": 22.99,
     "source": "chemist_warehouse_visible_text",
     "status": "ok",
-    "checked_at": "2026-05-07T05:55:07.762171+00:00"
+    "checked_at": "2026-05-07T08:22:58.201640+00:00"
   },
   "https://www.kathmandu.com.au/products/epiq-mns-hooded-down-jacket-v2-black-black": {
     "group_name": "Kathmandu Epiq Men's Hooded Down Jacket v2 Black",
@@ -30,7 +30,7 @@
     "previous_price": 399.98,
     "source": "json_ld",
     "status": "ok",
-    "checked_at": "2026-05-07T05:55:07.762171+00:00"
+    "checked_at": "2026-05-07T08:22:58.201640+00:00"
   },
   "https://www.columbiasportswear.com.au/products/33399-columbia-mens-fast-trek-ii-full-zip-fleece-jacket-collegiate-navy-am3039-468": {
     "group_name": "Columbia Men's Fast Trek II Full Zip Fleece Jacket Collegiate Navy",
@@ -41,7 +41,7 @@
     "previous_price": 79.0,
     "source": "json_ld",
     "status": "ok",
-    "checked_at": "2026-05-07T05:55:07.762171+00:00"
+    "checked_at": "2026-05-07T08:22:58.201640+00:00"
   },
   "https://www.columbiasportswear.com.au/products/60490-columbia-mens-klamath-range-ii-half-zip-fleece-pullover-river-blue-1352471-364": {
     "group_name": "Mens Klamath Range II Half Zip Fleece Pullover River Blue",
@@ -52,7 +52,7 @@
     "previous_price": 53.99,
     "source": "json_ld",
     "status": "ok",
-    "checked_at": "2026-05-07T05:55:07.762171+00:00"
+    "checked_at": "2026-05-07T08:22:58.201640+00:00"
   },
   "https://www.jbhifi.com.au/products/apple-iphone-17-pro-max-256gb-cosmic-orange": {
     "group_name": "Apple iPhone 17 Pro Max 256GB (Cosmic Orange)",
@@ -63,6 +63,6 @@
     "previous_price": 2199.0,
     "source": "json_ld",
     "status": "ok",
-    "checked_at": "2026-05-07T05:55:07.762171+00:00"
+    "checked_at": "2026-05-07T08:22:58.201640+00:00"
   }
 }
